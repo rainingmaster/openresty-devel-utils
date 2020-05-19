@@ -2,6 +2,10 @@
 
 use strict;
 use warnings;
+use Getopt::Std;
+
+my %opts;
+getopts('w', \%opts);
 
 sub output($);
 sub replace_quotes($);
@@ -15,9 +19,12 @@ for my $file (@ARGV) {
     $infile = $file;
     #print "$infile\n";
 
-    open my $in, $infile or die $!;
+    open my $in, $infile or print "open $infile failed" and die $!;
 
     $lineno = 0;
+
+    my @lines;
+    my $fix_line;
 
     my $level = 0;
 
@@ -25,7 +32,7 @@ for my $file (@ARGV) {
     my ($full_comment, $one_line_comment, $half_line_comment, $comment_not_end) = (0, 0, 0, 0);
 
     # bracket flags
-    my ($unclosed_brackets, $unclosed_brackets_lineno, $unfinished_space) = (0, 0, 0);
+    my ($unclosed_brackets, $unclosed_brackets_lineno, $unfinished_space, $has_long_line) = (0, 0, 0, 0);
 
     # level flags
     my ($next_level, $next_level_space) = (0, 0);
@@ -38,6 +45,8 @@ for my $file (@ARGV) {
 
     while (<$in>) {
         $line = $_;
+
+        $fix_line = "";
 
         $lineno++;
 
@@ -56,11 +65,11 @@ for my $file (@ARGV) {
             output "need space before *";
         }
 
-        if ($line =~ /^typedef struct \w+( *)(\w+);/) {
-            if (length($1) != 2) {
-                output "need two space before $2";
-            }
-        }
+        # if ($line =~ /^typedef struct \w+( *)(\w+);/) {
+        #     if (length($1) != 2) {
+        #         output "need two space before $2";
+        #     }
+        # }
 
         # function close or struct close
         if ($need_variable_align == 1 && $line =~ /^}/) {
@@ -164,15 +173,24 @@ for my $file (@ARGV) {
                         && $space != $space_with * 2)
 
                     # skip: line too long
-                    && length($line) - 1 - $space + $unfinished_space <= 80
+                    # && length($line) - 1 - $space + $unfinished_space <= 80
 
                     # only check the next line
-                    && $lineno == $unclosed_brackets_lineno + 1
+                    # && $lineno == $unclosed_brackets_lineno + 1
 
                     # skip: start with ')'
                     && $line_without_brackets !~ /^\s*\)/)
                 {
-                    output "incorrect front spaces, unclosed bracket";
+                    if (length($line) - 1 - $space + $unfinished_space > 80) {
+                        $has_long_line = 1;
+                    }
+
+                    if ($has_long_line == 0 && !($line =~ /^ *(\+|-|=|>|<|\||\*|!)/)) {
+                        output "incorrect front spaces, unclosed bracket";
+
+                        my $new_space = " " x $unfinished_space;
+                        $fix_line = ($line =~ s/^\s{$space}/$new_space/r);
+                    }
                 }
 
                 # we only check the next line after '{' for now
@@ -210,6 +228,7 @@ for my $file (@ARGV) {
             if ($unclosed_brackets == 1) {
                 if ($line_without_brackets =~ /\)([^)]*$)/g) {
                     $unclosed_brackets = 0;
+                    $has_long_line = 0;
                 }
             }
         }
@@ -266,6 +285,24 @@ for my $file (@ARGV) {
             $need_variable_align = 1;
             $variable_align_space = 0;
         }
+
+        if ($fix_line eq "") {
+            push @lines, $line;
+        } else {
+            push @lines, $fix_line;
+        }
+    }
+
+    close $in;
+
+    if ($opts{w}) {
+        my $text = join '', @lines;
+        open my $out, "> $infile" or
+            die "Can't open $infile for writing: $!";
+
+        binmode $out;
+        print $out $text;
+        close $out;
     }
 }
 
